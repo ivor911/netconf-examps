@@ -1,20 +1,99 @@
 #!/usr/bin/env python3
 from __future__ import print_function
+import threading
+import time
 import sysrepo as sr
 import sys
 #import yang as ly
 
-#oven state value determining whether the food is inside the oven or not 
-food_inside=0
-#oven state value determining whether the food is waiting for the oven to be ready 
-insert_food_on_ready=0
-#oven state value determining the current temperature of the oven 
-oven_temperature=250
-#oven config value stored locally just so that it is not needed to ask sysrepo for it all the time
+#Global oven variables
+
+#oven yang config value stored locally just so that it is not needed to as sysrepo for it all the time.
+#oven_power used to determining whether the power of oven is turned on(true) or off(false).
+oven_power=0
+#config_temperature used to determining whether the configure temperature of oven.
 config_temperature=0
+
+#oven state value determining whether the food is inside the oven or not 
+#NOTE: we only start cooking when food_inside=1.
+food_inside=0
+#oven state value determining the current temperature of the oven.
+oven_temperature=0
+#oven state value determining whether the food is waiting for the oven to be ready 
+insert_food_on_ready= 0
+
+stop_oven_thread = 0
+oven_thread_running = 0
+
+def strTo1(x):
+    x = int(x == 'true')
+    return x
+
+def oven_thread():
+    global oven_power
+    global config_temperature
+    global food_inside
+    global oven_temperature
+    global insert_food_on_ready
+    global stop_oven_thread
+    global oven_thread_running
+    
+    while True: 
+        oven_thread_running = 1
+        time.sleep(1)
+        if (oven_temperature < config_temperature):
+            # oven is heating up 50 degrees per second until the set temperature 
+            if (oven_temperature + 50 < config_temperature):
+                oven_temperature += 50
+            else:
+                oven_temperature = config_temperature
+                #oven reached the desired temperature, create a notification
+                #TODO 
+                #rc = sr_event_notif_send(sess, "/oven:oven-ready", NULL, 0);
+                #if (rc != SR_ERR_OK):
+                #    SRP_LOG_ERR("OVEN: Oven-ready notification generation failed: %s.", sr_strerror(rc));
+                #}
+            
+        elif (oven_temperature > config_temperature):
+            # oven is cooling down but it will never be colder than the room temperature 
+            desired_temperature = 25 if config_temperature < 25 else config_temperature
+            if (oven_temperature - 20 > desired_temperature):
+                oven_temperature -= 20
+            else:
+                oven_temperature = desired_temperature
+
+        if (insert_food_on_ready and oven_temperature >= config_temperature):
+            #food is inserted once the oven is ready 
+            insert_food_on_ready = 0
+            food_inside = 1
+            print("OVEN: Food put into the oven.")
+            #SRP_LOG_DBGMSG("OVEN: Food put into the oven.");
+
+        if stop_oven_thread:
+            # reset oven_thread to default
+            oven_thread_running = 0
+            stop_oven_thread = 0
+            print("OVEN: oven_thread() stop!")
+            break
 
 
 # Helper function for printing changes given operation, old and new value.
+def print_all_globals():
+    global oven_power
+    global config_temperature
+    global food_inside
+    global oven_temperature
+    global insert_food_on_ready
+    global stop_oven_thread
+    global oven_thread_running
+    print("global oven_power:           {}".format(oven_power))
+    print("global config_temperature:   {}".format(config_temperature))
+    print("global food_inside:          {}".format(food_inside))
+    print("global oven_temperature:     {}".format(oven_temperature))
+    print("global insert_food_on_ready: {}".format(insert_food_on_ready))
+    print("global stop_oven_thread:     {}".format(stop_oven_thread))
+    print("global oven_thread_running:  {}".format(oven_thread_running))
+
 def print_change(op, old_val, new_val):
     if (op == sr.SR_OP_CREATED):
            print("\t CREATED: ",end='')
@@ -62,16 +141,32 @@ def oven_insert_food_cb(session, path, input, event, request_id, output, private
 
 
     try:
-        print("\n\n ========== RPC CALLED for insert food START ==========")
+        print("========== RPC CALLED for insert food START ==========")
+        for i in range(input.val_cnt()):
+            print ("input: "+input.val(i).to_string())
+            print ("input: "+input.val(i).data.enum_val)
 
+        """
         global insert_food_on_ready
         global food_inside
+        
+        if (food_inside):
+            print("OVEN: Food already in the oven.")
+            return sr.SR_ERR_OPERATION_FAILED
 
-        insert_food_on_ready = 0
+        if (input[0].data.enum_val == "on-oven-ready"):
+            if (insert_food_on_ready): 
+                print("OVEN: Food already waiting for the oven to be ready.")
+                return sr.SR_ERR_OPERATION_FAILED
+            insert_food_on_ready =1
+            return sr.SR_ERR_OK
+            
+        insert_food_on_ready = 0 
         food_inside = 1
+        print("\t   OVEN: Food put into the oven.");
+        """
 
-        print("\n   OVEN: Food put into the oven.");
-        print("\n\n ========== RPC CALLED for insert food END==========")
+        print("========== RPC CALLED for insert food END==========")
     
     except Exception as e:
         print(e)
@@ -82,228 +177,181 @@ def oven_insert_food_cb(session, path, input, event, request_id, output, private
 def oven_remove_food_cb(session, path, input, event, request_id, output, private_data):
 
     try:
-        print("\n\n ========== RPC CALLED for remove food START ==========\n")
+        print("========== RPC CALLED for remove food START ==========")
 
-        global insert_food_on_ready
         global food_inside
         
-        if food_inside == "0":
-            print("\n   OVEN: Food not in the oven.\n")
+        if food_inside == 0:
+            print("\t   OVEN: Food not in the oven.")
             return sr.SR_ERR_OPERATION_FAILED
 
         food_inside = 0
 
-        print("\n   OVEN: Food taken out of the oven.\n");
-        print("\n\n ========== RPC CALLED for remove food END==========\n")
+        print("\t   OVEN: Food taken out of the oven.");
+        print("========== RPC CALLED for remove food END==========")
     
     except Exception as e:
         print(e)
 
     return sr.SR_ERR_OK
 
-def process_lan_ip(it, change, old_val, new_val):
-    lan_ip_created=[]
-    lan_ip_created_dict={}
-    lan_ip_deleted=[]
-    lan_ip_deleted_dict={}
-    lan_ip_modified=[]
-    lan_ip_modified_dict={}
-    lan_ip_moved=[]
-    lan_ip_moved_dict={}
+def update_global_oven_vars(opstr=None, \
+    old_node_name=None, old_val_str=None, \
+    new_node_name=None, new_val_str=None ):
 
-    if (change.oper() == sr.SR_OP_CREATED):
-        op_string="CREATED"
-        print("\t {}: ".format(op_string))
+    global oven_power
+    global food_inside
+    global insert_food_on_ready
+    global oven_temperature
+    global config_temperature
+    
+    if opstr != None :
+        if opstr == "CREATED" :
+            if new_node_name == "turned-on":
+                oven_power = strTo1(new_val_str)
 
-        # while loop run at least one time.
-        while change !=  None and change.oper() == sr.SR_OP_CREATED:
-            if lan_ip_created_dict.get("XPATH_INST") == None:
-                c_xpath = change.new_val().xpath() 
-                c_node_name = sr.Xpath_Ctx().node_name(c_xpath)
-                c_val_to_string = change.new_val().val_to_string()
-                #print( "\t c_xpath: {}".format(c_xpath) )
-                #print( "\t c_node_name: {}".format(c_node_name) )
-                #print( "\t c_val_to_string: {}".format(c_val_to_string) )
-                lan_ip_created_dict["XPATH_INST"]=c_xpath.replace("/{}".format(c_node_name), "")
-                lan_ip_created_dict[c_node_name]=c_val_to_string
-                #print("\t lan_ip_created_dict= {}\n\n".format(lan_ip_created_dict))
-            else:
-                c_xpath = change.new_val().xpath() 
-                c_node_name = sr.Xpath_Ctx().node_name(c_xpath)
-                c_val_to_string = change.new_val().val_to_string()
-                #print( "\t c_xpath: {}".format(c_xpath) )
-                #print( "\t c_node_name: {}".format(c_node_name) )
-                #print( "\t c_val_to_string: {}".format(c_val_to_string) )
-                if lan_ip_created_dict["XPATH_INST"] == c_xpath.replace("/{}".format(c_node_name), ""):
-                    lan_ip_created_dict[c_node_name]=c_val_to_string
-                    #print("\t lan_ip_created_dict= {}\n\n".format(lan_ip_created_dict))
-                else:
-                    # We need to append lan_ip_created_dict{} into lan_ip_created[], and then use a new lan_ip_created_dict{} next time
-                    lan_ip_created.append(lan_ip_created_dict)
-                    #print("\t lan_ip_created= {}\n\n".format(lan_ip_created))
-                    lan_ip_created_dict={}
-                    lan_ip_created_dict["XPATH_INST"]=c_xpath.replace("/{}".format(c_node_name), "")
-                    lan_ip_created_dict[c_node_name]=c_val_to_string
-                    #print("\t lan_ip_created_dict= {}\n\n".format(lan_ip_created_dict))
+            if new_node_name == "temperature":
+                config_temperature = new_val_str
 
-            change = sess.get_change_next(it)
+        elif opstr == "DELETED" :
+            if old_node_name == "turned-on":
+                oven_power = strTo1(new_val_str)
+
+            if old_node_name == "temperature":
+                config_temperature = new_val_str
+
+        elif opstr == "MODIFIED" :
+
+            # In oven, we only update new_val in MODIFIED.
+            if new_node_name == "turned-on":
+                oven_power = strTo1(new_val_str)
+
+            if new_node_name == "temperature":
+                config_temperature = new_val_str
+
+        elif opstr == "MOVED" :
+            pass
         else:
-            if change == None:
-                print("\t No more LAN change iterator found... End the process_lan_ip() call. (mesg from {})\n".format(op_string))
-                lan_ip_created.append(lan_ip_created_dict)
-                lan_ip_created_dict={}
-                print("\t lan_ip_created= {}".format(lan_ip_created))
-            elif change.oper() != sr.SR_OP_CREATED:
-                print("\t Not a LAN IP {} operator. Call process_lan_ip() again to prcocess next operator: {}.\n".format(op_string, change.oper()))
-                lan_ip_created.append(lan_ip_created_dict)
-                lan_ip_created_dict={}
-                print("\t lan_ip_created= {}".format(lan_ip_created))
-                process_lan_ip(it, change, change.old_val(), change.new_val())
+            print("\t Not a valid opstr: {}".format(opstr))
 
-    elif (change.oper() == sr.SR_OP_DELETED):
-        op_string="DELETED"
-        print("\t {}: ".format(op_string))
+    else:
+        print("\t opstr can't be None.")
 
-        # while loop run at least one time.
-        while change !=  None and change.oper() == sr.SR_OP_DELETED:
-            c_xpath = change.old_val().xpath() 
-            c_node_name = sr.Xpath_Ctx().node_name(c_xpath)
-            c_val_to_string = change.old_val().val_to_string()
-            print( "\t c_xpath: {}".format(c_xpath) )
-            print( "\t c_node_name: {}".format(c_node_name) )
-            print( "\t c_val_to_string: {}\n\n".format(c_val_to_string) )
-            lan_ip_deleted.append(c_val_to_string)
+    return sr.SR_ERR_OK
 
-            change = sess.get_change_next(it)
-        else:
-            if change == None:
-                print("\t No more LAN change iterator found... End the process_lan_ip() call. (mesg from {})\n".format(op_string))
-                print("\t lan_ip_deleted= {}".format(lan_ip_deleted))
-            elif change.oper() != sr.SR_OP_DELETED:
-                print("\t Not a LAN IP {} operator. Call process_lan_ip() again to prcocess next operator: {}.\n".format(op_string, change.oper()))
-                process_lan_ip(it, change, change.old_val(), change.new_val())
+def oven_done():
 
-    elif (change.oper() == sr.SR_OP_MODIFIED):
-        op_string="MODIFIED"
-        print("\t {}: ".format(op_string))
+    global oven_power
+    global stop_oven_thread
+    global oven_thread_running
+    global oven_temperature
 
-        # while loop run at least one time.
-        while change !=  None and change.oper() == sr.SR_OP_MODIFIED:
-                c_xpath = change.old_val().xpath() 
-                c_node_name = sr.Xpath_Ctx().node_name(c_xpath)
-                c_val_to_string = change.old_val().val_to_string()
-                print( "\t c_xpath: {}".format(c_xpath) )
-                print( "\t c_node_name: {}".format(c_node_name) )
-                print( "\t c_val_to_string: {}\n\n".format(c_val_to_string) )
-                lan_ip_modified.append(c_val_to_string)
-
-                c_xpath = change.new_val().xpath() 
-                c_node_name = sr.Xpath_Ctx().node_name(c_xpath)
-                c_val_to_string = change.new_val().val_to_string()
-                print( "\t c_xpath: {}".format(c_xpath) )
-                print( "\t c_node_name: {}".format(c_node_name) )
-                print( "\t c_val_to_string: {}\n\n".format(c_val_to_string) )
-                lan_ip_modified.append(c_val_to_string)
-
-                change = sess.get_change_next(it)
-        else:
-            if change == None:
-                print("\t No more LAN change iterator found... End the process_lan_ip() call. (mesg from {})\n".format(op_string))
-                print("\t lan_ip_modified= {}".format(lan_ip_modified))
-            elif change.oper() != sr.SR_OP_MODIFIED:
-                print("\t Not a LAN IP {} operator. Call process_lan_ip() again to prcocess next operator: {}.\n".format(op_string, change.oper()))
-                process_lan_ip(it, change, change.old_val(), change.new_val())
-
-    elif (change.oper() == sr.SR_OP_MOVED):
-        op_string="MODIFIED"
-        print("\t {}: ".format(op_string))
-
-        # while loop run at least one time.
-        while change !=  None and change.oper() == sr.SR_OP_MOVED:
-            c_xpath = change.old_val().xpath() 
-            print( "\t c_xpath_old: {}".format(c_xpath) )
-            lan_ip_moved.append(c_xpath)
-
-            c_xpath = change.new_val().xpath() 
-            print( "\t c_xpath_new: {}\n\n".format(c_xpath) )
-            lan_ip_moved.append(c_xpath)
-
-            change = sess.get_change_next(it)
-        else:
-            if change == None:
-                print("\t No more LAN change iterator found... End the process_lan_ip() call. (mesg from {})\n".format(op_string))
-                print("\t lan_ip_moved= {}".format(lan_ip_moved))
-            elif change.oper() != sr.SR_OP_MOVED:
-                print("\t Not a LAN IP {} operator. Call process_lan_ip() again to prcocess next operator: {}.\n".format(op_string, change.oper()))
-                process_lan_ip(it, change, change.old_val(), change.new_val())
-
-def oven_change(it, change, old_val, new_val):
-    if (change.oper() == sr.SR_OP_CREATED):
-        op_string="CREATED"
-        #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
-        c_xpath_old = change.old_val().xpath()
-        c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
-        c_val_to_string_old = change.old_val().val_to_string()
-        print( "\t c_xpath_old: {}".format(c_xpath_old) )
-        print( "\t c_node_name_old: {}".format(c_node_name_old) )
-        print( "\t c_val_to_string_old: {}\n\n".format(c_val_to_string_old) )
-        c_xpath_new = change.new_val().xpath()
-        c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
-        c_val_to_string_new = change.new_val().val_to_string()
-        print( "\t c_xpath_new: {}".format(c_xpath_new) )
-        print( "\t c_node_name_new: {}".format(c_node_name_new) )
-        print( "\t c_val_to_string_new: {}\n\n".format(c_val_to_string_new) )
+    if (oven_power==1 and oven_thread_running==0):
+        #the oven should be turned on and is not (create the oven thread)
+        stop_oven_thread = 0
+        t1 = threading.Thread(target = oven_thread) 
+        t1.start() 
+        t1.join()
+    elif (oven_power ==0 and oven_thread_running == 1):
+        #the oven should be turned off but is on (stop the oven thread) 
+        stop_oven_thread = 1
+        #we pretend the oven cooled down immediately after being turned off
+        oven_temperature = 25
 
 
-    elif (change.oper() == sr.SR_OP_DELETED):
-        op_string="DELETED"
-        #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
-        c_xpath_old = change.old_val().xpath()
-        c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
-        c_val_to_string_old = change.old_val().val_to_string()
-        print( "\t c_xpath_old: {}".format(c_xpath_old) )
-        print( "\t c_node_name_old: {}".format(c_node_name_old) )
-        print( "\t c_val_to_string_old: {}\n\n".format(c_val_to_string_old) )
-        c_xpath_new = change.new_val().xpath()
-        c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
-        c_val_to_string_new = change.new_val().val_to_string()
-        print( "\t c_xpath_new: {}".format(c_xpath_new) )
-        print( "\t c_node_name_new: {}".format(c_node_name_new) )
-        print( "\t c_val_to_string_new: {}\n\n".format(c_val_to_string_new) )
+    print_all_globals()
+    return sr.SR_ERR_OK
 
-    elif (change.oper() == sr.SR_OP_MODIFIED):
-        op_string="MODIFIED"
-        #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
-        c_xpath_old = change.old_val().xpath()
-        c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
-        c_val_to_string_old = change.old_val().val_to_string()
-        print( "\t c_xpath_old: {}".format(c_xpath_old) )
-        print( "\t c_node_name_old: {}".format(c_node_name_old) )
-        print( "\t c_val_to_string_old: {}\n\n".format(c_val_to_string_old) )
-        c_xpath_new = change.new_val().xpath()
-        c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
-        c_val_to_string_new = change.new_val().val_to_string()
-        print( "\t c_xpath_new: {}".format(c_xpath_new) )
-        print( "\t c_node_name_new: {}".format(c_node_name_new) )
-        print( "\t c_val_to_string_new: {}\n\n".format(c_val_to_string_new) )
+def oven_change(sess, it, change, old_val, new_val):
+    # while loop run at least one time.
+    while change != None:
+        if (change.oper() == sr.SR_OP_CREATED):
+            op_string="CREATED"
+            #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
+            c_xpath_old = change.old_val().xpath()
+            c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
+            c_val_to_string_old = change.old_val().val_to_string()
+            print( "\t [{}] c_xpath_old: {}".format(op_string, c_xpath_old) )
+            print( "\t [{}] c_node_name_old: {}".format(op_string, c_node_name_old) )
+            print( "\t [{}] c_val_to_string_old: {}".format(op_string, c_val_to_string_old) )
+            c_xpath_new = change.new_val().xpath()
+            c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
+            c_val_to_string_new = change.new_val().val_to_string()
+            print( "\t [{}] c_xpath_new: {}".format(op_string, c_xpath_new) )
+            print( "\t [{}] c_node_name_new: {}".format(op_string, c_node_name_new) )
+            print( "\t [{}] c_val_to_string_new: {}\n".format(op_string, c_val_to_string_new) )
+
+            # In CREATED, we only need update new_val.
+            update_global_oven_vars(opstr=op_string, new_node_name=c_node_name_new, new_val_str=c_val_to_string_new)
+
+        elif (change.oper() == sr.SR_OP_DELETED):
+            op_string="DELETED"
+            #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
+            c_xpath_old = change.old_val().xpath()
+            c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
+            c_val_to_string_old = change.old_val().val_to_string()
+            print( "\t [{}] c_xpath_old: {}".format(op_string, c_xpath_old) )
+            print( "\t [{}] c_node_name_old: {}".format(op_string, c_node_name_old) )
+            print( "\t [{}] c_val_to_string_old: {}".format(op_string, c_val_to_string_old) )
+            c_xpath_new = change.new_val().xpath()
+            c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
+            c_val_to_string_new = change.new_val().val_to_string()
+            print( "\t [{}] c_xpath_new: {}".format(op_string, c_xpath_new) )
+            print( "\t [{}] c_node_name_new: {}".format(op_string, c_node_name_new) )
+            print( "\t [{}] c_val_to_string_new: {}\n".format(op_string, c_val_to_string_new) )
+
+            # In DELETED, we only need update old_val.
+            update_global_oven_vars(opstr=op_string, old_node_name=c_node_name_old, old_val_str=c_val_to_string_old)
+
+        elif (change.oper() == sr.SR_OP_MODIFIED):
+            op_string="MODIFIED"
+            #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
+            c_xpath_old = change.old_val().xpath()
+            c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
+            c_val_to_string_old = change.old_val().val_to_string()
+            print( "\t [{}] c_xpath_old: {}".format(op_string, c_xpath_old) )
+            print( "\t [{}] c_node_name_old: {}".format(op_string, c_node_name_old) )
+            print( "\t [{}] c_val_to_string_old: {}".format(op_string, c_val_to_string_old) )
+            c_xpath_new = change.new_val().xpath()
+            c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
+            c_val_to_string_new = change.new_val().val_to_string()
+            print( "\t [{}] c_xpath_new: {}".format(op_string, c_xpath_new) )
+            print( "\t [{}] c_node_name_new: {}".format(op_string, c_node_name_new) )
+            print( "\t [{}] c_val_to_string_new: {}\n".format(op_string, c_val_to_string_new) )
+
+            # In MODIFIED, we need both old_val and new_val.
+            update_global_oven_vars(opstr=op_string, \
+                old_node_name=c_node_name_old, old_val_str=c_val_to_string_old, \
+                new_node_name=c_node_name_new, new_val_str=c_val_to_string_new)
+
+        elif (change.oper() == sr.SR_OP_MOVED):
+            op_string="MOVED"
+            #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
+            c_xpath_old = change.old_val().xpath()
+            c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
+            c_val_to_string_old = change.old_val().val_to_string()
+            print( "\t [{}] c_xpath_old: {}".format(op_string, c_xpath_old) )
+            print( "\t [{}] c_node_name_old: {}".format(op_string, c_node_name_old) )
+            print( "\t [{}] c_val_to_string_old: {}".format(op_string, c_val_to_string_old) )
+            c_xpath_new = change.new_val().xpath()
+            c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
+            c_val_to_string_new = change.new_val().val_to_string()
+            print( "\t [{}] c_xpath_new: {}".format(op_string, c_xpath_new) )
+            print( "\t [{}] c_node_name_new: {}".format(op_string, c_node_name_new) )
+            print( "\t [{}] c_val_to_string_new: {}\n".format(op_string, c_val_to_string_new) )
+
+            # In MOVED, we need both old_val and new_val, but we don't know which case hit in MOVED so we pass it now.
+            #update_global_oven_vars(opstr=op_string, \
+            #    old_node_name=c_node_name_old, old_val_str=c_val_to_string_old, \
+            #    new_node_name=c_node_name_new, new_val_str=c_val_to_string_new)
+
+        change = sess.get_change_next(it)
+
+    else:
+        print("\t No more {} change iterator found...End the oven_change()." )
 
 
-    elif (change.oper() == sr.SR_OP_MOVED):
-        op_string="MODIFIED"
-        #print("\t [{}] old_val: {}, new_val: {}".format(op_string, old_val.to_string(), new_val.to_string()))
-        c_xpath_old = change.old_val().xpath()
-        c_node_name_old = sr.Xpath_Ctx().node_name(c_xpath_old)
-        c_val_to_string_old = change.old_val().val_to_string()
-        print( "\t c_xpath_old: {}".format(c_xpath_old) )
-        print( "\t c_node_name_old: {}".format(c_node_name_old) )
-        print( "\t c_val_to_string_old: {}\n\n".format(c_val_to_string_old) )
-        c_xpath_new = change.new_val().xpath()
-        c_node_name_new = sr.Xpath_Ctx().node_name(c_xpath_new)
-        c_val_to_string_new = change.new_val().val_to_string()
-        print( "\t c_xpath_new: {}".format(c_xpath_new) )
-        print( "\t c_node_name_new: {}".format(c_node_name_new) )
-        print( "\t c_val_to_string_new: {}\n\n".format(c_val_to_string_new) )
-
+    return sr.SR_ERR_OK
 
 def process_change_event(sess, module_name, change_path):
     """ graber all change nodes and save it for later used inf process_done() """
@@ -316,14 +364,12 @@ def process_change_event(sess, module_name, change_path):
     if change == None:
         print("\t This change_path is not what we want.")
     else:
-        #process_lan_ip(it, change, change.old_val(), change.new_val())
-        oven_change(it, change, change.old_val(), change.new_val())
-
-    print("\n\n")
+        oven_change(sess, it, change, change.old_val(), change.new_val())
 
     return sr.SR_ERR_OK
 
 def process_done_event(sess, module_name, change_path):
+    oven_done()
     return sr.SR_ERR_OK
 
 # Function to be called for subscribed client of given session whenever configuration changes.
@@ -332,6 +378,8 @@ def module_change_cb(sess, module_name, xpath, event, request_id, private_data):
     try:
         #change_path = "/" + module_name + ":oven/Static-IP-Address-List/*//."
         #change_path = "/" + module_name + ":*//."
+        print ("========== START module_change_cb() - Notification " + ev_to_str(event) + "\n")
+
         print("module_name: {}".format(module_name))
         print("xpath: {}".format(xpath))
         print("event: {}".format(event))
@@ -345,32 +393,16 @@ def module_change_cb(sess, module_name, xpath, event, request_id, private_data):
 
         if (event == sr.SR_EV_CHANGE):
             print ("\n\n ========== IN module_change_cb() - Notification " + ev_to_str(event) + "\n")
-            print("\n\t CHANGES: =============================================\n")
             process_change_event(sess, module_name, xpath)
 
         elif (event == sr.SR_EV_DONE):
             print ("\n\n ========== IN module_change_cb() - Notification " + ev_to_str(event) + "\n")
-            print("\n\t CHANGES: =============================================\n")
-            #print("xpath: {}".format(xpath))
-            #process_done_event(sess, module_name, change_path)
+            process_done_event(sess, module_name, xpath)
 
         else:
             print ("\n\n ========== IN module_change_cb() - Notification " + ev_to_str(event) + "\n")
-        
-    
-        '''
-        it = sess.get_changes_iter(change_path);
 
-        while True:
-            change = sess.get_change_next(it)
-            if change == None:
-                break
-            print_change(change.oper(), change.old_val(), change.new_val())
-
-        '''
-
-        print("\n\n\t END OF CHANGES =======================================\n")
-        print ("\n\n ========== OUT module_change_cb() - Notification " + ev_to_str(event) + "\n")
+        print ("\n\n ========== END module_change_cb() - Notification " + ev_to_str(event) + "\n")
 
     except Exception as e:
         print(e)
@@ -389,13 +421,6 @@ def module_change_cb2(sess, module_name, xpath, event, request_id, private_data)
             print("\t Get iterator failed.")
             return sr.SR_ERR_NOT_FOUND
 
-        '''
-        while True:
-            change = sess.get_change_next(it)
-            if change == None:
-                break
-            print_change(change.oper(), change.old_val(), change.new_val())
-        '''
         change_tree = sess.get_change_tree_next(it)
         new_change_tree=sr.Tree_Change()
         if change_tree == None:
