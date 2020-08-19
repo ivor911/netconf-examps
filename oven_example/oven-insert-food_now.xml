@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+  <insert-food xmlns="urn:sysrepo:oven">
+    <time>now</time>
+  </insert-food>

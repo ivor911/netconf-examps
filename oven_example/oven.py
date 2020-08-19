@@ -12,7 +12,7 @@ import sys
 #oven_power used to determining whether the power of oven is turned on(true) or off(false).
 oven_power=0
 #config_temperature used to determining whether the configure temperature of oven.
-config_temperature=0
+config_temperature=200
 
 #oven state value determining whether the food is inside the oven or not 
 #NOTE: we only start cooking when food_inside=1.
@@ -38,6 +38,7 @@ def oven_thread():
     global stop_oven_thread
     global oven_thread_running
     
+    thread_name = threading.current_thread().name
     while True: 
         oven_thread_running = 1
         time.sleep(1)
@@ -62,18 +63,19 @@ def oven_thread():
             else:
                 oven_temperature = desired_temperature
 
+        print("[oven_thread({})] config_temperature is {} , oven_temperature is {} ".format(thread_name, config_temperature, oven_temperature))
         if (insert_food_on_ready and oven_temperature >= config_temperature):
             #food is inserted once the oven is ready 
             insert_food_on_ready = 0
             food_inside = 1
-            print("OVEN: Food put into the oven.")
+            print("[oven_thread({})] Food put into the oven.".format(thread_name))
             #SRP_LOG_DBGMSG("OVEN: Food put into the oven.");
 
         if stop_oven_thread:
             # reset oven_thread to default
             oven_thread_running = 0
             stop_oven_thread = 0
-            print("OVEN: oven_thread() stop!")
+            print("[oven_thread({})] oven_thread() stop!".format(thread_name))
             break
 
 
@@ -141,30 +143,38 @@ def oven_insert_food_cb(session, path, input, event, request_id, output, private
 
 
     try:
-        print("========== RPC CALLED for insert food START ==========")
-        for i in range(input.val_cnt()):
-            print ("input: "+input.val(i).to_string())
-            print ("input: "+input.val(i).data.enum_val)
-
-        """
         global insert_food_on_ready
         global food_inside
-        
-        if (food_inside):
-            print("OVEN: Food already in the oven.")
-            return sr.SR_ERR_OPERATION_FAILED
 
-        if (input[0].data.enum_val == "on-oven-ready"):
-            if (insert_food_on_ready): 
-                print("OVEN: Food already waiting for the oven to be ready.")
+        print("========== RPC CALLED for insert food START ==========")
+        for i in range(input.val_cnt()):
+            #print ("input: "+input.val(i).xpath())
+            #print ("input: "+input.val(i).to_string())
+            c_to_string = input.val(i).to_string()
+            c_xpath = input.val(i).xpath()
+            c_node_name = sr.Xpath_Ctx().node_name(c_xpath)
+            c_val_to_string = input.val(i).val_to_string()
+            print("input to_string: {}".format(c_to_string), end='')
+            print("input xpath: {}".format(c_xpath))
+            print("input node name: {}".format(c_node_name))
+            print("input val_to_string: {}".format(c_val_to_string))
+
+            if (food_inside):
+                print("OVEN: Food already in the oven.")
                 return sr.SR_ERR_OPERATION_FAILED
-            insert_food_on_ready =1
-            return sr.SR_ERR_OK
-            
-        insert_food_on_ready = 0 
-        food_inside = 1
-        print("\t   OVEN: Food put into the oven.");
-        """
+
+            if (c_node_name == "time" and c_val_to_string == "on-oven-ready"):
+                if (insert_food_on_ready): 
+                    print("OVEN: Food already waiting for the oven to be ready.")
+                    return sr.SR_ERR_OPERATION_FAILED
+
+                insert_food_on_ready =1
+                print("\t   OVEN: Setted insert_food_on_ready=1");
+                return sr.SR_ERR_OK
+                
+            insert_food_on_ready = 0 
+            food_inside = 1
+            print("\t   OVEN: Food put into the oven.");
 
         print("========== RPC CALLED for insert food END==========")
     
@@ -211,14 +221,14 @@ def update_global_oven_vars(opstr=None, \
                 oven_power = strTo1(new_val_str)
 
             if new_node_name == "temperature":
-                config_temperature = new_val_str
+                config_temperature = int(new_val_str)
 
         elif opstr == "DELETED" :
             if old_node_name == "turned-on":
                 oven_power = strTo1(new_val_str)
 
             if old_node_name == "temperature":
-                config_temperature = new_val_str
+                config_temperature = int(new_val_str)
 
         elif opstr == "MODIFIED" :
 
@@ -227,7 +237,7 @@ def update_global_oven_vars(opstr=None, \
                 oven_power = strTo1(new_val_str)
 
             if new_node_name == "temperature":
-                config_temperature = new_val_str
+                config_temperature = int(new_val_str)
 
         elif opstr == "MOVED" :
             pass
@@ -446,15 +456,20 @@ def module_change_cb2(sess, module_name, xpath, event, request_id, private_data)
     return sr.SR_ERR_OK
 
 def oven_state_cb(session, module_name, path, request_xpath, request_id, parent, private_data):
-    print("\n\n oven_state_cb in \n")
-    print("\n\n ========== CALLBACK CALLED TO PROVIDE \"" + path + "\" DATA ==========\n")
+    global food_inside
+    global oven_temperature
+    print("\n\n oven_state_cb in")
+    print("\n\n ========== CALLBACK CALLED TO PROVIDE \"" + path + "\" DATA ==========")
     try:
         ctx = session.get_context()
         mod = ctx.get_module(module_name)
 
+        print("\t /oven:oven-state")
+        print("\t\t temperature {}".format(oven_temperature))
+        print("\t\t food-inside {}".format('true' if food_inside == 1 else 'false'))
         parent.reset(sr.Data_Node(ctx, "/oven:oven-state", None, sr.LYD_ANYDATA_CONSTSTRING, 0))
-        tmpr = sr.Data_Node(parent, mod, "temperature", "3")
-        foodIn = sr.Data_Node(parent, mod, "food-inside", "true")
+        tmpr = sr.Data_Node(parent, mod, "temperature", "{}".format(oven_temperature))
+        foodIn = sr.Data_Node(parent, mod, "food-inside", "{}".format('true' if food_inside == 1 else 'false'))
 
     except Exception as e:
         print(e)
